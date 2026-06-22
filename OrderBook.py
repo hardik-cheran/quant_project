@@ -1,13 +1,37 @@
+import random
+
+class RandomTrader:
+    def __init__(self, trader_id):
+        self.trader_id = trader_id
+
+    def step(self, book):
+        action = random.choice(["limit_buy","limit_sell","market_buy","market_sell"])
+        price = random.randint(95,105)
+        quantity = random.randint(1,10)
+
+        if action == "limit_buy":
+            book.add_limit_buy(price,quantity,self.trader_id)
+
+        elif action == "limit_sell":
+            book.add_limit_sell(price,quantity, self.trader_id)
+
+        elif action == "market_buy":
+            book.market_buy(quantity)
+
+        elif action == "market_sell":
+            book.market_sell(quantity)
+
 class Order:
-    def __init__(self, order_id, side, price, quantity):
+    def __init__(self, order_id, trader_id,side, price, quantity):
         self.order_id = order_id
+        self.trader_id = trader_id
         self.side = side
         self.price = price
         self.quantity = quantity
 
 
     def __repr__(self):
-        return f"Order(id={self.order_id}, qty={self.quantity})"
+        return f"Order(id={self.order_id}, trader={self.trader_id}, qty={self.quantity})"
 
 
 class OrderBook:
@@ -17,7 +41,7 @@ class OrderBook:
         self.next_order_id = 1
         self.trade_history = []
 
-    def add_limit_buy(self,price,quantity):
+    def add_limit_buy(self,price,quantity,trader_id):
 
         while quantity > 0 and self.asks:
             best_ask = min(self.asks)
@@ -27,28 +51,28 @@ class OrderBook:
             available = oldest_order.quantity
             if quantity < available:
                 print(f"TRADE: {quantity}@{best_ask}")
-                self.trade_history.append({"price" : best_ask, "quantity" : quantity})
+                self.trade_history.append({"price" : best_ask, "quantity" : quantity, "buyer" : trader_id, "seller" : oldest_order.trader_id})
                 oldest_order.quantity -= quantity
                 quantity = 0
                 
             else:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_ask}")
-                self.trade_history.append({"price" : best_ask, "quantity" : available})
+                self.trade_history.append({"price" : best_ask, "quantity" : available, "buyer" : trader_id, "seller" : oldest_order.trader_id})
                 self.asks[best_ask].pop(0)
                 if not self.asks[best_ask]:
                     del self.asks[best_ask]
             
 
         if quantity > 0:
-            order =Order(self.next_order_id,"BUY",price,quantity)
+            order =Order(self.next_order_id,trader_id,"BUY",price,quantity)
             self.next_order_id +=1
 
             if price not in self.bids:
                 self.bids[price] = []
             self.bids[price].append(order)
 
-    def add_limit_sell(self,price,quantity):
+    def add_limit_sell(self,price,quantity,trader_id):
         while quantity > 0 and self.bids:
             best_bid = max(self.bids)
             if best_bid < price:
@@ -57,19 +81,19 @@ class OrderBook:
             available = oldest_order.quantity
             if quantity < available:
                 print(f"TRADE: {quantity}@{best_bid}")
-                self.trade_history.append({"price" : best_bid, "quantity" : quantity})
+                self.trade_history.append({"price" : best_bid, "quantity" : quantity, "buyer" : oldest_order.trader_id, "seller" : trader_id})
                 oldest_order.quantity -= quantity
                 quantity = 0
             else:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_bid}")
-                self.trade_history.append({"price" : best_bid, "quantity" : available})
+                self.trade_history.append({"price" : best_bid, "quantity" : available, "buyer" : oldest_order.trader_id, "seller" : trader_id})
                 self.bids[best_bid].pop(0)
                 if not self.bids[best_bid]:
                     del self.bids[best_bid]
 
         if quantity > 0:
-            order = Order(self.next_order_id,"SELL",price,quantity)
+            order = Order(self.next_order_id,trader_id,"SELL",price,quantity)
             self.next_order_id +=1
 
             if price not in self.asks:
@@ -94,15 +118,17 @@ class OrderBook:
         oldest_order = self.asks[best_ask][0]
         available = oldest_order.quantity
         if quantity <= available:
-            self.trade_history.append({"price" : best_ask, "quantity" : quantity})
+            self.trade_history.append({"price" : best_ask, "quantity" : quantity, "buyer" : None, "seller" : oldest_order.trader_id})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
                 self.asks[best_ask].pop(0)
                 if not self.asks[best_ask]:
                     del self.asks[best_ask]
         else:
-            self.trade_history.append({"price":best_ask, "quantity" : available})
+            self.trade_history.append({"price":best_ask, "quantity" : available, "buyer" : None, "seller" : oldest_order.trader_id})
             self.asks[best_ask].pop(0)
+            if not self.asks[best_ask]:
+                del self.asks[best_ask]
             quantity -= available
             self.market_buy(quantity)
 
@@ -114,7 +140,7 @@ class OrderBook:
         oldest_order = self.bids[best_bid][0]
         available = oldest_order.quantity
         if quantity <= available:
-            self.trade_history.append({"price": best_bid, "quantity" : quantity})
+            self.trade_history.append({"price": best_bid, "quantity" : quantity, "buyer" : oldest_order.trader_id, "seller" : None})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
                  self.bids[best_bid].pop(0)
@@ -123,6 +149,8 @@ class OrderBook:
         else:
             self.trade_history.append({"price" : best_bid, "quantity": available})
             self.bids[best_bid].pop(0)
+            if not self.bids[best_bid]:
+                del self.bids[best_bid]
             quantity -= available 
             self.market_sell(quantity)
 
@@ -168,9 +196,14 @@ class OrderBook:
 
 book = OrderBook()
 
-book.add_limit_buy(100,10)
-book.add_limit_sell(102,10)
+traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4")]
+for _ in range(100):
+    random.choice(traders).step(book)
 
-print(book.best_bid())
-print(book.best_ask())
-print(book.spread())
+print(book.bids)
+
+inventory = {"T1":0, "T2" :0, "T3":0, "T4":0}
+for trade in book.trade_history:
+    inventory[trade["buyer"]] += trade["quantity"]
+    inventory[trade["seller"]] -= trade["quantity"]
+print(inventory)
