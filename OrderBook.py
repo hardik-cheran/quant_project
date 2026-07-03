@@ -16,10 +16,10 @@ class RandomTrader:
             book.add_limit_sell(price,quantity, self.trader_id)
 
         elif action == "market_buy":
-            book.market_buy(quantity)
+            book.market_buy(quantity, self.trader_id)
 
         elif action == "market_sell":
-            book.market_sell(quantity)
+            book.market_sell(quantity, self.trader_id)
 
 class Order:
     def __init__(self, order_id, trader_id,side, price, quantity):
@@ -110,7 +110,7 @@ class OrderBook:
         for price in sorted(self.bids, reverse = True):
             print(price, ":", self.bids[price])
 
-    def market_buy(self, quantity):
+    def market_buy(self, quantity, trader_id):
         if not self.asks:
             print("No liquidity available")
             return
@@ -118,21 +118,21 @@ class OrderBook:
         oldest_order = self.asks[best_ask][0]
         available = oldest_order.quantity
         if quantity <= available:
-            self.trade_history.append({"price" : best_ask, "quantity" : quantity, "buyer" : None, "seller" : oldest_order.trader_id})
+            self.trade_history.append({"price" : best_ask, "quantity" : quantity, "buyer" : trader_id, "seller" : oldest_order.trader_id})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
                 self.asks[best_ask].pop(0)
                 if not self.asks[best_ask]:
                     del self.asks[best_ask]
         else:
-            self.trade_history.append({"price":best_ask, "quantity" : available, "buyer" : None, "seller" : oldest_order.trader_id})
+            self.trade_history.append({"price":best_ask, "quantity" : available, "buyer" : trader_id, "seller" : oldest_order.trader_id})
             self.asks[best_ask].pop(0)
             if not self.asks[best_ask]:
                 del self.asks[best_ask]
             quantity -= available
-            self.market_buy(quantity)
+            self.market_buy(quantity, trader_id)
 
-    def market_sell(self,quantity):
+    def market_sell(self,quantity,trader_id):
         if not self.bids:
             print("No liquidity available")
             return
@@ -140,19 +140,19 @@ class OrderBook:
         oldest_order = self.bids[best_bid][0]
         available = oldest_order.quantity
         if quantity <= available:
-            self.trade_history.append({"price": best_bid, "quantity" : quantity, "buyer" : oldest_order.trader_id, "seller" : None})
+            self.trade_history.append({"price": best_bid, "quantity" : quantity, "buyer" : oldest_order.trader_id, "seller" : trader_id})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
                  self.bids[best_bid].pop(0)
                  if not self.bids[best_bid]:
                      del self.bids[best_bid]
         else:
-            self.trade_history.append({"price" : best_bid, "quantity": available})
+            self.trade_history.append({"price" : best_bid, "quantity": available, "buyer" : oldest_order.trader_id, "seller" : trader_id})
             self.bids[best_bid].pop(0)
             if not self.bids[best_bid]:
                 del self.bids[best_bid]
             quantity -= available 
-            self.market_sell(quantity)
+            self.market_sell(quantity, trader_id)
 
     def cancel_order(self, order_id):
         for price in self.bids:
@@ -193,17 +193,44 @@ class OrderBook:
             return None
         return self.best_ask() - self.best_bid()
     
+class MarketMaker:
+    def __init__(self,trader_id):
+        self.trader_id = trader_id
+
+    def step(self,book):
+        mid = book.mid_price()
+        if mid is None:
+            return
+        buy_price = mid - 1
+        sell_price = mid + 1
+        book.add_limit_buy(buy_price, 5, self.trader_id)
+        book.add_limit_sell(sell_price, 5, self.trader_id)
+
+
+    
 
 book = OrderBook()
 
-traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4")]
+traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4"), MarketMaker("MM")]
 for _ in range(100):
     random.choice(traders).step(book)
 
-print(book.bids)
+print(book.trade_history[:10])
 
-inventory = {"T1":0, "T2" :0, "T3":0, "T4":0}
+inventory = {"T1":0, "T2" :0, "T3":0, "T4":0, "MM":0}
+cash = {"T1":0, "T2":0, "T3":0, "T4":0, "MM":0}
 for trade in book.trade_history:
     inventory[trade["buyer"]] += trade["quantity"]
     inventory[trade["seller"]] -= trade["quantity"]
+    cash[trade["buyer"]] -= trade["price"] * trade["quantity"]
+    cash[trade["seller"]] += trade["price"] * trade["quantity"]
 print(inventory)
+print(cash)
+mid = book.mid_price()
+pnl = {}
+if mid is None:
+    print("No mid price available")
+else:
+    for trader in inventory:
+        pnl[trader] = cash[trader] + inventory[trader] * mid
+    print(pnl)
