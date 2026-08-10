@@ -1,4 +1,7 @@
 import random
+import heapq
+from collections import deque
+
 
 class RandomTrader:
     def __init__(self, trader_id):
@@ -38,6 +41,8 @@ class OrderBook:
     def __init__(self):
         self.bids = {}
         self.asks = {}
+        self.bid_heap = []
+        self.ask_heap = []
         self.next_order_id = 1
         self.trade_history = []
 
@@ -59,7 +64,7 @@ class OrderBook:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_ask}")
                 self.trade_history.append({"price" : best_ask, "quantity" : available, "buyer" : trader_id, "seller" : oldest_order.trader_id})
-                self.asks[best_ask].pop(0)
+                self.asks[best_ask].popleft()
                 if not self.asks[best_ask]:
                     del self.asks[best_ask]
             
@@ -69,7 +74,8 @@ class OrderBook:
             self.next_order_id +=1
 
             if price not in self.bids:
-                self.bids[price] = []
+                self.bids[price] = deque()
+                heapq.heappush(self.bid_heap, price)
             self.bids[price].append(order)
 
     def add_limit_sell(self,price,quantity,trader_id):
@@ -88,7 +94,7 @@ class OrderBook:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_bid}")
                 self.trade_history.append({"price" : best_bid, "quantity" : available, "buyer" : oldest_order.trader_id, "seller" : trader_id})
-                self.bids[best_bid].pop(0)
+                self.bids[best_bid].popleft()
                 if not self.bids[best_bid]:
                     del self.bids[best_bid]
 
@@ -97,7 +103,8 @@ class OrderBook:
             self.next_order_id +=1
 
             if price not in self.asks:
-                self.asks[price] = []
+                self.asks[price] = deque()
+                heapq.heappush(self.ask_heap, price)
             self.asks[price].append(order)
 
     def print_book(self):
@@ -121,12 +128,12 @@ class OrderBook:
             self.trade_history.append({"price" : best_ask, "quantity" : quantity, "buyer" : trader_id, "seller" : oldest_order.trader_id})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
-                self.asks[best_ask].pop(0)
+                self.asks[best_ask].popleft()
                 if not self.asks[best_ask]:
                     del self.asks[best_ask]
         else:
             self.trade_history.append({"price":best_ask, "quantity" : available, "buyer" : trader_id, "seller" : oldest_order.trader_id})
-            self.asks[best_ask].pop(0)
+            self.asks[best_ask].popleft()
             if not self.asks[best_ask]:
                 del self.asks[best_ask]
             quantity -= available
@@ -143,12 +150,12 @@ class OrderBook:
             self.trade_history.append({"price": best_bid, "quantity" : quantity, "buyer" : oldest_order.trader_id, "seller" : trader_id})
             oldest_order.quantity -= quantity
             if oldest_order.quantity == 0:
-                 self.bids[best_bid].pop(0)
+                 self.bids[best_bid].popleft()
                  if not self.bids[best_bid]:
                      del self.bids[best_bid]
         else:
             self.trade_history.append({"price" : best_bid, "quantity": available, "buyer" : oldest_order.trader_id, "seller" : trader_id})
-            self.bids[best_bid].pop(0)
+            self.bids[best_bid].popleft()
             if not self.bids[best_bid]:
                 del self.bids[best_bid]
             quantity -= available 
@@ -172,14 +179,20 @@ class OrderBook:
                         return
                     
     def best_bid(self):
-        if not self.bids:
-            return None
-        return max(self.bids)
-    
+        while self.bid_heap:
+            price = -self.bid_heap[0]
+            if price in self.bids:
+                return price
+            heapq.heappop(self.bid_heap)
+        return None
+
     def best_ask(self):
-        if not self.asks:
-            return None
-        return min(self.asks)
+        while self.ask_heap:
+            price = self.ask_heap[0]
+            if price in self.asks:
+                return price
+            heapq.heappop(self.ask_heap)
+        return None
     
     def mid_price(self):
         best_bid = self.best_bid()
@@ -196,13 +209,21 @@ class OrderBook:
 class MarketMaker:
     def __init__(self,trader_id):
         self.trader_id = trader_id
+        self.inventory = 0
+        self.cash = 0
+
 
     def step(self,book):
         mid = book.mid_price()
         if mid is None:
             return
-        buy_price = mid - 1
-        sell_price = mid + 1
+        gamma = 0.01
+        sigma = 2
+        tau = 1
+        r = mid - self.inventory*gamma*sigma**2*tau
+        spread = 2
+        buy_price = r - spread/2
+        sell_price = r + spread/2
         book.add_limit_buy(buy_price, 5, self.trader_id)
         book.add_limit_sell(sell_price, 5, self.trader_id)
 
@@ -210,8 +231,8 @@ class MarketMaker:
     
 
 book = OrderBook()
-
-traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4"), MarketMaker("MM")]
+market_maker = MarketMaker("MM")
+traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4"), market_maker]
 for _ in range(100):
     random.choice(traders).step(book)
 
