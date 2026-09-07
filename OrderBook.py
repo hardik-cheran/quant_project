@@ -267,7 +267,7 @@ class OrderBook:
 
 
     def apply_fill(self,mm,signed_qty,price):
-        old_inv = mm.inventory - signed_qty
+        old_inv = mm.inventory 
         new_inv = old_inv + signed_qty
         if old_inv == 0 or (old_inv > 0 ) == (signed_qty > 0):
             total_cost = mm.avg_cost * abs(old_inv) + price * abs(signed_qty)
