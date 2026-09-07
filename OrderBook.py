@@ -89,7 +89,7 @@ class OrderBook:
             else:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_ask}")
-                self.record_trade(best_ask,quantity,trader_id,oldest_order.trader_id)
+                self.record_trade(best_ask,available,trader_id,oldest_order.trader_id)
                 filled_order = self.asks[best_ask][0]
                 del self.order_map[filled_order.order_id]
                 self.asks[best_ask].popleft()
@@ -130,7 +130,7 @@ class OrderBook:
             else:
                 quantity -= available
                 print(f"TRADE: {available} @ {best_bid}")
-                self.record_trade(best_bid, quantity, oldest_order.trader_id, trader_id)
+                self.record_trade(best_bid, available, oldest_order.trader_id, trader_id)
                 filled_order = self.bids[best_bid][0]
                 del self.order_map[filled_order.order_id]
                 self.bids[best_bid].popleft()
@@ -248,28 +248,42 @@ class OrderBook:
         buyer = self.traders.get(buyer_id)
         seller = self.traders.get(seller_id)
         if buyer is not None:
-            if hasattr(buyer, "inventory"):
-                buyer.inventory += quantity
+            if isinstance(buyer, MarketMaker):
+                self.apply_fill(buyer,quantity,price)
             if hasattr(buyer, "cash"):
                 buyer.cash -= price*quantity
-            if isinstance(buyer, MarketMaker):
-                old_inventory = buyer.inventory - quantity
-                if old_inventory <= 0:
-                   buyer.avg_cost=  price
-                else:
-                    buyer.avg_cost = (buyer.avg_cost * old_inventory + price * quantity)/buyer.inventory
+            if hasattr(buyer, "inventory"):
+                buyer.inventory += quantity
+
 
             
         if seller is not None:
-            if hasattr(seller, "inventory"):
-                seller.inventory -= quantity
+            if isinstance(seller, MarketMaker):
+                self.apply_fill(seller,-quantity,price)
             if hasattr(seller, "cash"):
                 seller.cash+= price*quantity
-            if isinstance(seller, MarketMaker):
-                profit = (price - seller.avg_cost) * quantity
+            if hasattr(seller, "inventory"):
+                seller.inventory -= quantity
 
-            seller.realized_pnl += profit
-                           
+
+    def apply_fill(self,mm,signed_qty,price):
+        old_inv = mm.inventory - signed_qty
+        new_inv = old_inv + signed_qty
+        if old_inv == 0 or (old_inv > 0 ) == (signed_qty > 0):
+            total_cost = mm.avg_cost * abs(old_inv) + price * abs(signed_qty)
+            mm.avg_cost = total_cost/abs(new_inv) if new_inv != 0 else 0
+        else:
+            closing_qty =  min(abs(old_inv), abs(signed_qty))       
+            mm.realized_pnl += (price - mm.avg_cost) * closing_qty * (1 if old_inv > 0 else -1)
+            remaining = abs(signed_qty) - closing_qty
+            if remaining > 0:
+             mm.avg_cost = price
+            elif new_inv == 0:
+             mm.avg_cost = 0
+
+        mm.inventory = new_inv
+
+                      
     def best_bid(self):
         while self.bid_heap:
             price = -self.bid_heap[0]
@@ -300,11 +314,13 @@ class OrderBook:
 
     def estimate_sigma(self):
         if len(self.trade_history) < 2:
-            return 2
+            return 0.02
         prices = [trade["price"] for trade in self.trade_history[-20:]]
         returns = []
         for i in range(1, len(prices)):
-            returns.append(prices[i]-prices[i-1])
+            returns.append((prices[i]-prices[i-1])/prices[i-1])
+        if not returns:
+            return 0.02    
         mean = sum(returns)/len(returns)
         variance = sum((x-mean)**2 for x in returns)/len(returns)
         return variance**0.5
@@ -334,9 +350,13 @@ class MarketMaker:
         if mid is None:
             mid=100
         gamma = 0.5
-        sigma = book.estimate_sigma()
+        sigma_pct = book.estimate_sigma()
+        sigma = sigma_pct * mid
         tau = 1
-        r = mid - self.inventory*gamma*sigma**2*tau
+        skew = self.inventory*gamma*sigma**2*tau
+        max_skew = 0.1 * mid
+        skew = max(-max_skew, min(max_skew,skew))
+        r = mid - skew
         spread = max(1, sigma)
         buy_price = int(r - spread/2)
         sell_price = int(r + spread/2)
@@ -394,7 +414,7 @@ print(pnl_history)
 mid = book.mid_price()
 pnl = {}
 if mid is None:
-    print("No mid price available")
+    mid = 100
 else:
     for trader in inventory:
         pnl[trader] = cash[trader] + inventory[trader] * mid
