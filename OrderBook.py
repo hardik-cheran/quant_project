@@ -41,7 +41,7 @@ class RandomTrader:
         else:
             if book.order_map:
                 order_id = random.choice(list(book.order_map.keys()))
-                book.cancel_order(order_id)
+                book.cancel_order(order_id,self.trader_id)
 
 class Order:
     def __init__(self, order_id, trader_id,side, price, quantity):
@@ -50,6 +50,8 @@ class Order:
         self.side = side
         self.price = price
         self.quantity = quantity
+        self.status = "NEW"
+        self.filled_quantity = 0
 
 
     def __repr__(self):
@@ -66,205 +68,412 @@ class OrderBook:
         self.trade_history = []
         self.traders = {}
         self.order_map = {}
+        self.order_history = {}
 
+    
+    def add_limit_buy(self, price, quantity, trader_id):
 
-    def add_limit_buy(self,price,quantity,trader_id):
+     requested_quantity = quantity
+     filled_quantity = 0
+     incoming_filled = 0
+     total_value = 0
+     order_id = None
 
-        while quantity > 0 and self.asks:
-            best_ask = self.best_ask()
-            if best_ask is None:
-                break
-            if best_ask > price:
-                break
-            oldest_order = self.asks[best_ask][0]
-            if oldest_order.trader_id == trader_id:
-                break
-            available = oldest_order.quantity
-            if quantity < available:
-                print(f"TRADE: {quantity}@{best_ask}")
-                self.record_trade(best_ask,quantity,trader_id,oldest_order.trader_id)
-                oldest_order.quantity -= quantity
-                quantity = 0
-                
-            else:
-                quantity -= available
-                print(f"TRADE: {available} @ {best_ask}")
-                self.record_trade(best_ask,available,trader_id,oldest_order.trader_id)
-                filled_order = self.asks[best_ask][0]
-                del self.order_map[filled_order.order_id]
-                self.asks[best_ask].popleft()
-                if not self.asks[best_ask]:
-                    del self.asks[best_ask]
-            
+     while quantity > 0 and self.asks:
 
-        if quantity > 0:
-            order =Order(self.next_order_id,trader_id,"BUY",price,quantity)
-            self.order_map[order.order_id] = order
-            self.next_order_id +=1
-            order_id = order.order_id
-
-            if price not in self.bids:
-                self.bids[price] = deque()
-                heapq.heappush(self.bid_heap, -price)
-            self.bids[price].append(order)
-
-            return order_id
-        return None
-        
-    def add_limit_sell(self,price,quantity,trader_id):
-        while quantity > 0 and self.bids:
-            best_bid = self.best_bid()
-            if best_bid is None:
-                break
-            if best_bid < price:
-                break
-            oldest_order = self.bids[best_bid][0]
-            if oldest_order.trader_id == trader_id:
-                break
-            available = oldest_order.quantity
-            if quantity < available:
-                print(f"TRADE: {quantity}@{best_bid}")
-                self.record_trade(best_bid, quantity, oldest_order.trader_id, trader_id)
-                oldest_order.quantity -= quantity
-                quantity = 0
-            else:
-                quantity -= available
-                print(f"TRADE: {available} @ {best_bid}")
-                self.record_trade(best_bid, available, oldest_order.trader_id, trader_id)
-                filled_order = self.bids[best_bid][0]
-                del self.order_map[filled_order.order_id]
-                self.bids[best_bid].popleft()
-                if not self.bids[best_bid]:
-                    del self.bids[best_bid]
-
-        if quantity > 0:
-            order = Order(self.next_order_id,trader_id,"SELL",price,quantity)
-            self.order_map[order.order_id] = order
-            self.next_order_id +=1
-            order_id = order.order_id
-
-            if price not in self.asks:
-                self.asks[price] = deque()
-                heapq.heappush(self.ask_heap, price)
-            self.asks[price].append(order)
-            return order_id
-        return None
-
-    def print_book(self):
-        print("ASKS")
-        for price in sorted(self.asks):
-            print(price, ";", self.asks[price])
-
-        print()
-        print("BIDS")
-        for price in sorted(self.bids, reverse = True):
-            print(price, ":", self.bids[price])
-
-    def market_buy(self, quantity, trader_id):
-        if not self.asks:
-            print("No liquidity available")
-            return
         best_ask = self.best_ask()
+
+        if best_ask is None or best_ask > price:
+            break
+
         oldest_order = self.asks[best_ask][0]
+
+        # Self-trade prevention
         if oldest_order.trader_id == trader_id:
-            print("Self trade detected")
-            return
+            print("Self-trade prevention: incoming buy order rejected")
+
+            return {
+                "requested_quantity": requested_quantity,
+                "filled_quantity": filled_quantity,
+                "remaining_quantity": quantity,
+                "average_execution_price": (
+                    total_value / filled_quantity
+                    if filled_quantity > 0 else 0
+                ),
+                "order_id": None,
+                "status": "REJECTED"
+            }
+
         available = oldest_order.quantity
-        if quantity <= available:
-            self.record_trade(best_ask,quantity,trader_id,oldest_order.trader_id)
-            oldest_order.quantity -= quantity
-            if oldest_order.quantity == 0:
-                filled_order = self.asks[best_ask][0]
-                del self.order_map[filled_order.order_id]
-                self.asks[best_ask].popleft()
-                if not self.asks[best_ask]:
-                    del self.asks[best_ask]
+        traded_quantity = min(quantity, available)
+
+        print(f"TRADE: {traded_quantity} @ {best_ask}")
+
+        self.record_trade(
+            best_ask,
+            traded_quantity,
+            trader_id,
+            oldest_order.trader_id
+        )
+
+        oldest_order.quantity -= traded_quantity
+        oldest_order.filled_quantity += traded_quantity
+        quantity -= traded_quantity
+
+        if oldest_order.quantity == 0:
+          oldest_order.status = "FILLED"
         else:
-            self.record_trade(best_ask, available, trader_id, oldest_order.trader_id)
-            filled_order = self.asks[best_ask][0]
+          oldest_order.status = "PARTIALLY_FILLED"
+
+        filled_quantity += traded_quantity
+        incoming_filled += traded_quantity
+        total_value += traded_quantity * best_ask
+
+        if oldest_order.quantity == 0:
+
+            filled_order = self.asks[best_ask].popleft()
             del self.order_map[filled_order.order_id]
-            self.asks[best_ask].popleft()
+
             if not self.asks[best_ask]:
                 del self.asks[best_ask]
-            quantity -= available
-            self.market_buy(quantity, trader_id)
 
-    def market_sell(self,quantity,trader_id):
-        if not self.bids:
-            print("No liquidity available")
-            return
+    # Add remaining quantity to the order book
+     if quantity > 0:
+
+        order = Order(
+            self.next_order_id,
+            trader_id,
+            "BUY",
+            price,
+            quantity
+        )
+        order.filled_quantity = incoming_filled
+
+        order.status = ("PARTIALLY_FILLED" if incoming_filled > 0 else "RESTING")
+
+        order_id = order.order_id
+        self.order_map[order_id] = order
+        self.order_history[order.order_id] = order
+        self.next_order_id += 1
+
+        if price not in self.bids:
+            self.bids[price] = deque()
+            heapq.heappush(self.bid_heap, -price)
+
+        self.bids[price].append(order)
+
+     average_price = (
+        total_value / filled_quantity
+        if filled_quantity > 0 else 0
+     )
+
+     if filled_quantity == 0:
+        status = "RESTING"
+     elif quantity == 0:
+        status = "FILLED"
+     else:
+        status = "PARTIALLY_FILLED"
+
+     return {
+        "requested_quantity": requested_quantity,
+        "filled_quantity": filled_quantity,
+        "remaining_quantity": quantity,
+        "average_execution_price": average_price,
+        "order_id": order_id,
+        "status": status
+    }
+
+        
+    
+    def add_limit_sell(self, price, quantity, trader_id):
+
+     requested_quantity = quantity
+     filled_quantity = 0
+     incoming_filled = 0
+     total_value = 0
+     order_id = None
+
+     while quantity > 0 and self.bids:
+
         best_bid = self.best_bid()
+
+        if best_bid is None or best_bid < price:
+            break
+
         oldest_order = self.bids[best_bid][0]
+
+        # Self-trade prevention
         if oldest_order.trader_id == trader_id:
-            print("Self trade detected")
-            return
+            print("Self-trade prevention: incoming sell order rejected")
+
+            return {
+                "requested_quantity": requested_quantity,
+                "filled_quantity": filled_quantity,
+                "remaining_quantity": quantity,
+                "average_execution_price": (
+                    total_value / filled_quantity
+                    if filled_quantity > 0 else 0
+                ),
+                "order_id": None,
+                "status": "REJECTED"
+            }
+
         available = oldest_order.quantity
-        if quantity <= available:
-            self.record_trade(best_bid, quantity, trader_id, oldest_order.trader_id)
-            oldest_order.quantity -= quantity
-            if oldest_order.quantity == 0:
-                 filled_order = self.bids[best_bid][0]
-                 del self.order_map[filled_order.order_id]
-                 self.bids[best_bid].popleft()
-                 if not self.bids[best_bid]:
-                     del self.bids[best_bid]
+        traded_quantity = min(quantity, available)
+
+        print(f"TRADE: {traded_quantity} @ {best_bid}")
+
+        self.record_trade(
+            best_bid,
+            traded_quantity,
+            oldest_order.trader_id,
+            trader_id
+        )
+
+        oldest_order.quantity -= traded_quantity
+        oldest_order.filled_quantity += traded_quantity
+        quantity -= traded_quantity
+
+        if oldest_order.quantity == 0:
+         oldest_order.status = "FILLED"
         else:
-            self.record_trade(best_bid, available, trader_id, oldest_order.trader_id)
-            filled_order = self.bids[best_bid][0]
+         oldest_order.status = "PARTIALLY_FILLED"
+
+        filled_quantity += traded_quantity
+        incoming_filled += traded_quantity
+        total_value += traded_quantity * best_bid
+
+        if oldest_order.quantity == 0:
+
+            filled_order = self.bids[best_bid].popleft()
             del self.order_map[filled_order.order_id]
-            self.bids[best_bid].popleft()
+
             if not self.bids[best_bid]:
                 del self.bids[best_bid]
-            quantity -= available 
-            self.market_sell(quantity, trader_id)
 
-    def cancel_order(self, order_id):
+    # Add remaining quantity to the order book
+     if quantity > 0:
 
+        order = Order(
+            self.next_order_id,
+            trader_id,
+            "SELL",
+            price,
+            quantity
+        )
+        order.filled_quantity = incoming_filled
+        order.status = ("PARTIALLY_FILLED" if incoming_filled > 0 else "RESTING")
+        
+
+        order_id = order.order_id
+        self.order_map[order_id] = order
+        self.order_history[order_id] = order
+        self.next_order_id += 1
+
+        if price not in self.asks:
+            self.asks[price] = deque()
+            heapq.heappush(self.ask_heap, price)
+
+        self.asks[price].append(order)
+
+     average_price = (
+        total_value / filled_quantity
+        if filled_quantity > 0 else 0
+     )
+
+     if filled_quantity == 0:
+        status = "RESTING"
+     elif quantity == 0:
+        status = "FILLED"
+     else:
+        status = "PARTIALLY_FILLED"
+
+     return {
+        "requested_quantity": requested_quantity,
+        "filled_quantity": filled_quantity,
+        "remaining_quantity": quantity,
+        "average_execution_price": average_price,
+        "order_id": order_id,
+        "status": status
+     }
+
+
+    def market_buy(self, trader_id, quantity):
+     requested_quantity = quantity
+     filled_quantity = 0
+     total_value = 0
+
+     while quantity > 0:
+
+        best_price = self.best_ask()
+
+        if best_price is None:
+            break
+
+        best_ask_order = self.asks[best_price][0]
+
+        # Prevent self-trading
+        if best_ask_order.trader_id == trader_id:
+            break
+
+        traded_quantity = min(quantity, best_ask_order.quantity)
+        execution_price = best_ask_order.price
+
+        # Update quantities
+        best_ask_order.quantity -= traded_quantity
+        quantity -= traded_quantity
+
+        # Record execution
+        self.record_trade(
+            execution_price,
+            traded_quantity,
+            trader_id,
+            best_ask_order.trader_id
+        )
+
+        filled_quantity += traded_quantity
+        total_value += traded_quantity * execution_price
+
+        # Remove completely filled order
+        if best_ask_order.quantity == 0:
+            self.asks[best_price].popleft()
+            del self.order_map[best_ask_order.order_id]
+
+            if not self.asks[best_price]:
+                del self.asks[best_price]
+
+     unfilled_quantity = requested_quantity - filled_quantity
+
+     average_price = (
+        total_value / filled_quantity
+        if filled_quantity > 0 else 0
+      )
+
+     return {
+        "requested_quantity": requested_quantity,
+        "filled_quantity": filled_quantity,
+        "unfilled_quantity": unfilled_quantity,
+        "average_execution_price": average_price
+     }
+
+
+
+    def market_sell(self, trader_id, quantity):
+      requested_quantity = quantity
+      filled_quantity = 0
+      total_value = 0
+
+      while quantity > 0:
+
+        best_price = self.best_bid()
+
+        if best_price is None:
+            break
+
+        best_bid_order = self.bids[best_price][0]
+
+        # Prevent self-trading
+        if best_bid_order.trader_id == trader_id:
+            break
+
+        traded_quantity = min(quantity, best_bid_order.quantity)
+        execution_price = best_bid_order.price
+
+        # Update quantities
+        best_bid_order.quantity -= traded_quantity
+        quantity -= traded_quantity
+
+        # Record execution
+        self.record_trade(
+            execution_price,
+            traded_quantity,
+            best_bid_order.trader_id,
+            trader_id
+        )
+
+        filled_quantity += traded_quantity
+        total_value += traded_quantity * execution_price
+
+        # Remove completely filled order
+        if best_bid_order.quantity == 0:
+            self.bids[best_price].popleft()
+            del self.order_map[best_bid_order.order_id]
+
+            if not self.bids[best_price]:
+                del self.bids[best_price]
+
+      unfilled_quantity = requested_quantity - filled_quantity
+
+      average_price = (
+        total_value / filled_quantity
+        if filled_quantity > 0 else 0
+      )
+
+      return {
+        "requested_quantity": requested_quantity,
+        "filled_quantity": filled_quantity,
+        "unfilled_quantity": unfilled_quantity,
+        "average_execution_price": average_price
+      }
+
+
+    def cancel_order(self, order_id, trader_id):
      order = self.order_map.get(order_id)
 
      if order is None:
-        return
-     
-     price = order.price
+        return False
 
-     if order.side == "BUY":
+    # Check ownership
+     if order.trader_id != trader_id:
+        return False
 
-        self.bids[price].remove(order)
+    # Remove order from the order book
+     book_side = self.bids if order.side == "buy" else self.asks
 
-        if not self.bids[price]:
-            del self.bids[price]
+     if order.price in book_side:
+        book_side[order.price].remove(order)
 
-     else:
+        if not book_side[order.price]:
+            del book_side[order.price]
 
-        self.asks[price].remove(order)
-
-        if not self.asks[price]:
-            del self.asks[price]
-
+     order.status = "CANCELED"
      del self.order_map[order_id]
 
+     return True
+
     def record_trade(self, price, quantity, buyer_id, seller_id):
-        self.trade_history.append({"price":price, "quantity":quantity, "buyer":buyer_id, "seller":seller_id})
-        buyer = self.traders.get(buyer_id)
-        seller = self.traders.get(seller_id)
-        if buyer is not None:
-            if isinstance(buyer, MarketMaker):
-                self.apply_fill(buyer,quantity,price)
-            if hasattr(buyer, "cash"):
-                buyer.cash -= price*quantity
-            if hasattr(buyer, "inventory"):
-                buyer.inventory += quantity
 
+     self.trade_history.append({
+        "price": price,
+        "quantity": quantity,
+        "buyer": buyer_id,
+        "seller": seller_id
+    })
 
-            
-        if seller is not None:
-            if isinstance(seller, MarketMaker):
-                self.apply_fill(seller,-quantity,price)
-            if hasattr(seller, "cash"):
-                seller.cash+= price*quantity
-            if hasattr(seller, "inventory"):
-                seller.inventory -= quantity
+     buyer = self.traders.get(buyer_id)
+     seller = self.traders.get(seller_id)
 
+     if buyer is not None:
+
+        if isinstance(buyer, MarketMaker):
+            self.apply_fill(buyer, quantity, price)
+
+        elif hasattr(buyer, "inventory"):
+            buyer.inventory += quantity
+
+        if hasattr(buyer, "cash"):
+            buyer.cash -= price * quantity
+
+     if seller is not None:
+
+        if isinstance(seller, MarketMaker):
+            self.apply_fill(seller, -quantity, price)
+
+        elif hasattr(seller, "inventory"):
+            seller.inventory -= quantity
+
+        if hasattr(seller, "cash"):
+            seller.cash += price * quantity
 
     def apply_fill(self,mm,signed_qty,price):
         old_inv = mm.inventory 
@@ -342,7 +551,7 @@ class MarketMaker:
 
     def step(self,book):
         if self.buy_order_id is not None:
-            book.cancel_order(self.buy_order_id)
+            book.cancel_order(self.trader_id, self.buy_order_id)
         if self.sell_order_id is not None:
             book.cancel_order(self.sell_order_id)
 
@@ -371,63 +580,30 @@ class MarketMaker:
 
 
     
-
 book = OrderBook()
-market_maker = MarketMaker("MM")
-traders = [RandomTrader("T1"), RandomTrader("T2"), RandomTrader("T3"), RandomTrader("T4"), market_maker]
-book.traders["MM"] = market_maker
-for trader in traders:
-    book.traders[trader.trader_id] = trader
-inventory_history = []
-cash_history = []
-pnl_history = []
-for _ in range(100):
-    trader = random.choice(traders)
-    if trader.trader_id == "MM":
-        print("MM selected")
-    trader.step(book)
 
-    inventory_history.append(market_maker.inventory)
-    cash_history.append(market_maker.cash)
-    pnl_history.append(market_maker.cash + market_maker.inventory * (book.mid_price() if book.mid_price() is not None else 100))
+# T1 offers 3 units at 100
+book.add_limit_sell(100, 3, "T1")
 
+# T2 wants to buy 5 units at 105
+report = book.add_limit_buy(105, 5, "T2")
 
-print(book.trade_history[:10])
+print("Execution report:", report)
 
-inventory = {"T1":0, "T2" :0, "T3":0, "T4":0, "MM":0}
-cash = {"T1":0, "T2":0, "T3":0, "T4":0, "MM":0}
-for trade in book.trade_history:
-    if trade["buyer"] == trade["seller"]:
-        print(trade)
+# Find T2's resting order
+order_id = report["order_id"]
 
-    inventory[trade["buyer"]] += trade["quantity"]
-    inventory[trade["seller"]] -= trade["quantity"]
-    cash[trade["buyer"]] -= trade["price"] * trade["quantity"]
-    cash[trade["seller"]] += trade["price"] * trade["quantity"]
-    inventory_history.append(market_maker.inventory)
-    cash_history.append(market_maker.cash)
-print(inventory)
-print(cash)
-print(inventory_history)
-print(cash_history)
-print(pnl_history)  
-mid = book.mid_price()
-pnl = {}
-if mid is None:
-    mid = 100
-else:
-    for trader in inventory:
-        pnl[trader] = cash[trader] + inventory[trader] * mid
-    print(pnl)
+order = book.order_map[order_id]
 
-print("Final Inventory =", market_maker.inventory)
-print("Final Cash =", market_maker.cash)
-print("Final Unrealized PnL =", market_maker.unrealized_pnl(mid))
-print("Final Realized PnL =", market_maker.realized_pnl)
+print("Before cancellation:")
+print("Filled:", order.filled_quantity)
+print("Remaining:", order.quantity)
+print("Status:", order.status)
 
-print(
-    "Total PnL =",
-    market_maker.realized_pnl +
-    market_maker.unrealized_pnl(mid)
-)
+# Cancel T2's remaining order
+book.cancel_order(order_id, "T2")
 
+print("After cancellation:")
+print("Status:", order.status)
+print(book.order_map)
+print(book.order_history[order_id].status)
